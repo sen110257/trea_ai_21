@@ -140,19 +140,19 @@ const config = {
     height: 50,
     speed: 6,
     jumpPower: -15,
-    gravity: 0.6
+    gravity: 0.8
   },
   platform: {
     baseWidth: 120,
     minWidth: 60,
     height: 15,
-    baseCount: 8,
-    verticalSpacing: 80
+    baseCount: 12,
+    verticalSpacing: 70
   },
   difficulty: {
     speedIncrease: 0.02,
-    widthDecrease: 0.5,
-    spacingIncrease: 0.5
+    widthDecrease: 0.8,
+    spacingIncrease: 0.3
   }
 }
 
@@ -223,7 +223,7 @@ const initCanvas = () => {
 const initGame = () => {
   player = {
     x: canvasWidth.value / 2 - config.player.width / 2,
-    y: canvasHeight.value * 0.3,
+    y: canvasHeight.value * 0.15,
     vx: 0,
     vy: 0,
     width: config.player.width,
@@ -245,19 +245,21 @@ const initGame = () => {
 // 生成初始平台
 const generateInitialPlatforms = () => {
   platforms = []
-  let y = canvasHeight.value * 0.4
   
-  // 玩家起始平台
+  // 起始平台在玩家正下方
+  let y = canvasHeight.value * 0.25
+  
+  // 玩家起始平台（大一点，让玩家容易起步）
   platforms.push(createPlatform(
     canvasWidth.value / 2 - config.platform.baseWidth / 2,
     y,
-    config.platform.baseWidth,
+    config.platform.baseWidth * 1.2,
     'normal'
   ))
   
-  // 生成更多平台
+  // 生成更多平台（向下生成，y值增加）
   for (let i = 1; i < config.platform.baseCount; i++) {
-    y -= config.platform.verticalSpacing
+    y += config.platform.verticalSpacing
     const width = config.platform.baseWidth
     const x = Math.random() * (canvasWidth.value - width)
     platforms.push(createPlatform(x, y, width, getRandomPlatformType()))
@@ -308,6 +310,9 @@ const update = () => {
   // 应用重力
   player.vy += config.player.gravity
   
+  // 记录这一帧开始时的位置（用于碰撞检测）
+  const prevPlayerBottom = player.y + player.height
+  
   // 更新位置
   player.x += player.vx
   player.y += player.vy
@@ -324,13 +329,24 @@ const update = () => {
   platforms.forEach(platform => {
     if (!platform.visible) return
     
-    // 简单的碰撞检测（只检测从上方落下）
+    // 检测玩家是否从上方落在平台上
+    // 条件：
+    // 1. 玩家正在向下移动 (vy > 0)
+    // 2. 水平范围重叠
+    // 3. 这一帧结束时，玩家底部 >= 平台顶部
+    // 4. 这一帧开始时，玩家底部 <= 平台顶部（或刚刚越过）
+    
+    const playerBottom = player.y + player.height
+    const platformTop = platform.y
+    
+    // 简化但更精确的碰撞检测：
+    // 玩家在这一帧内从平台上方移动到了平台上
     if (
       player.vy > 0 &&
       player.x + player.width > platform.x &&
       player.x < platform.x + platform.width &&
-      player.y + player.height > platform.y &&
-      player.y + player.height < platform.y + platform.height + player.vy
+      playerBottom >= platformTop &&
+      prevPlayerBottom <= platformTop + 5
     ) {
       handlePlatformCollision(platform)
     }
@@ -346,14 +362,17 @@ const update = () => {
     }
   })
   
-  // 相机跟随
-  const targetCameraY = player.y - canvasHeight.value * 0.4
-  if (targetCameraY < cameraY) {
-    cameraY = targetCameraY
+  // 相机跟随 - 玩家向下掉落，相机也向下移动
+  // 当玩家位置低于屏幕中间位置时，相机开始跟随
+  const playerScreenY = player.y - cameraY
+  if (playerScreenY > canvasHeight.value * 0.4) {
+    const targetCameraY = player.y - canvasHeight.value * 0.4
+    // 平滑移动相机
+    cameraY += (targetCameraY - cameraY) * 0.15
   }
   
-  // 更新层数
-  const currentFloor = Math.floor((-cameraY) / config.platform.verticalSpacing) + 1
+  // 更新层数 - 层数根据玩家下落的距离计算
+  const currentFloor = Math.floor((player.y - canvasHeight.value * 0.25) / config.platform.verticalSpacing) + 1
   if (currentFloor > floor.value) {
     floor.value = currentFloor
     addScore(10 + Math.floor(Math.random() * 20))
@@ -365,8 +384,14 @@ const update = () => {
   // 移除屏幕外的平台
   removeOffscreenPlatforms()
   
-  // 检测游戏结束（玩家掉出屏幕下方）
-  if (player.y - cameraY > canvasHeight.value + 100) {
+  // 检测游戏结束
+  // 玩家掉出屏幕底部 - 没有踩中平台，掉出屏幕下方
+  // 或者玩家掉出屏幕上方 - 被相机"推"出顶部（这种情况很少见，除非玩家不动）
+  const playerScreenBottom = player.y + player.height - cameraY
+  const playerScreenTop = player.y - cameraY
+  
+  // 玩家掉出屏幕底部（失败条件）
+  if (playerScreenTop > canvasHeight.value + 100) {
     gameOver()
   }
   
@@ -420,28 +445,33 @@ const addScore = (points) => {
 const generateNewPlatforms = () => {
   const difficulty = Math.min(floor.value / 100, 1)
   
-  // 计算当前平台的最高Y值
-  let highestY = Infinity
+  // 计算当前平台的最低Y值（最下方的平台）
+  let lowestY = -Infinity
   platforms.forEach(p => {
-    if (p.y < highestY) highestY = p.y
+    if (p.y > lowestY) lowestY = p.y
   })
   
-  // 在屏幕上方生成新平台
+  // 在屏幕下方生成新平台（玩家向下掉落，所以新平台在更下方）
   const spacing = config.platform.verticalSpacing + difficulty * config.difficulty.spacingIncrease
-  while (highestY > cameraY - spacing * 2) {
-    highestY -= spacing
+  const screenBottomY = cameraY + canvasHeight.value
+  
+  // 当最低的平台还在屏幕可见范围内时，继续生成新平台
+  while (lowestY < screenBottomY + spacing * 2) {
+    lowestY += spacing
     const width = Math.max(
       config.platform.minWidth,
-      config.platform.baseWidth - difficulty * config.difficulty.widthDecrease
+      config.platform.baseWidth - difficulty * config.difficulty.widthDecrease * floor.value
     )
     const x = Math.random() * (canvasWidth.value - width)
-    platforms.push(createPlatform(x, highestY, width, getRandomPlatformType()))
+    platforms.push(createPlatform(x, lowestY, width, getRandomPlatformType()))
   }
 }
 
 // 移除屏幕外的平台
 const removeOffscreenPlatforms = () => {
-  platforms = platforms.filter(p => p.y - cameraY < canvasHeight.value + 100)
+  // 移除屏幕上方太远处的平台（玩家已经过了，不会再回来）
+  const screenTopY = cameraY - 100
+  platforms = platforms.filter(p => p.y > screenTopY)
 }
 
 // 绘制游戏
